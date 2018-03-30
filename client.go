@@ -287,9 +287,9 @@ func (c *Client) DeactivateAuthorization(ctx context.Context, url string) (*Auth
 }
 
 // AcceptChallenge requests a challenge verification from the ACME server.
-func (c *Client) AcceptChallenge(ctx context.Context, challenge acme.Challenge) (*Challenge, error) {
+func (c *Client) AcceptChallenge(ctx context.Context, challenge *acme.Challenge) (*Challenge, error) {
 	cr := challengeRequest{
-		KeyAuthorization: c.authorizationKey(challenge.Token),
+		KeyAuthorization: authorizationKey(challenge.Token, c.accountKey),
 	}
 
 	res, err := c.postRequest(ctx, challenge.URL, cr, false)
@@ -436,6 +436,10 @@ func (c *Client) newAuthzURL(ctx context.Context) (string, error) {
 		}
 	}
 	return c.directory.NewAuthz, nil
+}
+
+func authorizationKey(token, accountKey string) string {
+	return token + "." + base64.RawURLEncoding.EncodeToString([]byte(accountKey))
 }
 
 func reportProblem(body io.ReadCloser, message string) error {
