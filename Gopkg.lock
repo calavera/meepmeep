@@ -30,7 +30,7 @@
     "va",
     "wfe"
   ]
-  revision = "f4b61dd9ad871c24cbdcdcbb4a2760670bc6748d"
+  revision = "cae1c3522ee7a4871550f4ff9378677e06a4cdf7"
 
 [[projects]]
   name = "github.com/pkg/errors"
@@ -69,8 +69,8 @@
     "cipher",
     "json"
   ]
-  revision = "552e98edab5d620205ff1a8960bf52a5a10aad03"
-  version = "v2.1.5"
+  revision = "76dd09796242edb5b897103a75df2645c028c960"
+  version = "v2.1.6"
 
 [solve-meta]
   analyzer-name = "dep"

@@ -9,6 +9,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"io"
 	"io/ioutil"
 	"net/http"
@@ -26,6 +27,8 @@ const (
 	joseContentType   = "application/jose+json"
 	deactivatedStatus = "deactivated"
 	derFormat         = "application/pkix-cert"
+	pemFormat         = "application/pem-certificate-chain; charset=utf-8"
+	certificateHeader = "CERTIFICATE"
 )
 
 // Client executes requests to the ACME server.
@@ -143,19 +146,7 @@ func (c *Client) NewOrder(ctx context.Context, identifiers ...acme.Identifier) (
 	}
 	defer res.Body.Close()
 
-	if res.StatusCode != http.StatusCreated {
-		return nil, reportProblem(res.Body, "error creating new order")
-	}
-
-	var o acme.Order
-	if err := json.NewDecoder(res.Body).Decode(&o); err != nil {
-		return nil, errors.Wrap(err, "error decoding new order response")
-	}
-
-	return &Order{
-		Order: o,
-		URL:   res.Header.Get(locationKey),
-	}, nil
+	return decodeOrder(res, http.StatusCreated)
 }
 
 // FinalizeOrder changes the order status to finalized.
@@ -180,7 +171,7 @@ func (c *Client) FinalizeOrder(ctx context.Context, o *Order) (*Order, error) {
 	}
 
 	fr := finalizeRequest{
-		CSR: string(csrBytes),
+		CSR: base64.RawURLEncoding.EncodeToString(csrBytes),
 	}
 
 	res, err := c.postRequest(ctx, o.Finalize, fr, false)
@@ -228,13 +219,24 @@ func (c *Client) RequestCertificate(ctx context.Context, url string) (*Certifica
 		return nil, errors.Wrap(err, "error reading certificate DER data")
 	}
 
-	certs, err := x509.ParseCertificates(b)
-	if err != nil {
-		return nil, errors.Wrap(err, "error parsing certificate DER data")
+	var certs []*x509.Certificate
+	if res.Header.Get("Content-Type") == pemFormat {
+		ct, err := decodePEMCertificates(b)
+		if err != nil {
+			return nil, errors.Wrap(err, "error parsing certificate PEM data")
+		}
+		certs = ct
+	} else {
+		ct, err := x509.ParseCertificates(b)
+		if err != nil {
+			return nil, errors.Wrap(err, "error parsing certificate DER data")
+		}
+		certs = ct
 	}
 
 	return &Certificate{
-		Chain: certs,
+		Certificate: certs[0],
+		Chain:       certs[1:],
 	}, nil
 }
 
@@ -288,8 +290,13 @@ func (c *Client) DeactivateAuthorization(ctx context.Context, url string) (*Auth
 
 // AcceptChallenge requests a challenge verification from the ACME server.
 func (c *Client) AcceptChallenge(ctx context.Context, challenge *acme.Challenge) (*Challenge, error) {
+	key, err := c.authorizationKey(challenge.Token)
+	if err != nil {
+		return nil, err
+	}
+
 	cr := challengeRequest{
-		KeyAuthorization: authorizationKey(challenge.Token, c.accountKey),
+		KeyAuthorization: key,
 	}
 
 	res, err := c.postRequest(ctx, challenge.URL, cr, false)
@@ -298,19 +305,29 @@ func (c *Client) AcceptChallenge(ctx context.Context, challenge *acme.Challenge)
 	}
 	defer res.Body.Close()
 
-	if res.StatusCode != http.StatusOK {
-		return nil, reportProblem(res.Body, "error requesting challenge")
-	}
+	return decodeChallenge(res)
+}
 
-	var a acme.Challenge
-	if err := json.NewDecoder(res.Body).Decode(&a); err != nil {
-		return nil, errors.Wrap(err, "error decoding challenge authorization response")
+// GetChallenge requests an existent challenge object from the ACME server.
+func (c *Client) GetChallenge(ctx context.Context, url string) (*Challenge, error) {
+	res, err := c.getRequest(ctx, url)
+	if err != nil {
+		return nil, err
 	}
+	defer res.Body.Close()
 
-	return &Challenge{
-		Challenge: a,
-		URL:       res.Header.Get(locationKey),
-	}, nil
+	return decodeChallenge(res)
+}
+
+// GetOrder requests an existent order object from the ACME server.
+func (c *Client) GetOrder(ctx context.Context, url string) (*Order, error) {
+	res, err := c.getRequest(ctx, url)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+
+	return decodeOrder(res, http.StatusOK)
 }
 
 // nonce fetches a new nonce from the ACME server.
@@ -389,8 +406,14 @@ func (c *Client) signingKey() jose.SigningKey {
 	return jose.SigningKey{Algorithm: jose.SignatureAlgorithm(c.algorithm), Key: k}
 }
 
-func (c *Client) authorizationKey(token string) string {
-	return token + "." + base64.RawURLEncoding.EncodeToString([]byte(c.accountKey))
+func (c *Client) authorizationKey(token string) (string, error) {
+	key := jose.JSONWebKey{Algorithm: c.algorithm, KeyID: c.accountKey, Key: c.signer}
+	thumbprint, err := key.Thumbprint(crypto.SHA256)
+	if err != nil {
+		return "", errors.Wrap(err, "error generating the authorization key")
+	}
+
+	return token + "." + base64.RawURLEncoding.EncodeToString(thumbprint), nil
 }
 
 func (c *Client) loadDirectory(ctx context.Context) error {
@@ -438,14 +461,64 @@ func (c *Client) newAuthzURL(ctx context.Context) (string, error) {
 	return c.directory.NewAuthz, nil
 }
 
-func authorizationKey(token, accountKey string) string {
-	return token + "." + base64.RawURLEncoding.EncodeToString([]byte(accountKey))
-}
-
 func reportProblem(body io.ReadCloser, message string) error {
 	var d acme.ProblemDetails
 	if err := json.NewDecoder(body).Decode(&d); err != nil {
 		return errors.Wrap(err, "error decoding problem details :: "+message)
 	}
 	return errors.Wrap(error(&d), message)
+}
+
+func decodeChallenge(res *http.Response) (*Challenge, error) {
+	if res.StatusCode != http.StatusOK {
+		return nil, reportProblem(res.Body, "error requesting challenge")
+	}
+
+	var a acme.Challenge
+	if err := json.NewDecoder(res.Body).Decode(&a); err != nil {
+		return nil, errors.Wrap(err, "error decoding challenge authorization response")
+	}
+
+	return &Challenge{
+		Challenge: a,
+		URL:       res.Header.Get(locationKey),
+	}, nil
+}
+
+func decodeOrder(res *http.Response, expectedStatus int) (*Order, error) {
+	if res.StatusCode != expectedStatus {
+		return nil, reportProblem(res.Body, "error processing order")
+	}
+
+	var o acme.Order
+	if err := json.NewDecoder(res.Body).Decode(&o); err != nil {
+		return nil, errors.Wrap(err, "error decoding new order response")
+	}
+
+	return &Order{
+		Order: o,
+		URL:   res.Header.Get(locationKey),
+	}, nil
+}
+
+func decodePEMCertificates(b []byte) ([]*x509.Certificate, error) {
+	var chain []*x509.Certificate
+
+	rest := b
+	for rest != nil && len(rest) > 0 {
+		var block *pem.Block
+		block, rest = pem.Decode(rest)
+
+		if block == nil || block.Type != certificateHeader {
+			return nil, errors.New("failed to decode PEM block containing certificate")
+		}
+
+		cert, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			return nil, errors.Wrap(err, "error parsing certificate")
+		}
+		chain = append(chain, cert)
+	}
+
+	return chain, nil
 }

@@ -32,5 +32,6 @@ type Challenge struct {
 
 // Certificate holds a certificate chain in x509 DER format.
 type Certificate struct {
-	Chain []*x509.Certificate
+	Certificate *x509.Certificate
+	Chain       []*x509.Certificate
 }
