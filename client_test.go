@@ -116,6 +116,12 @@ func TestClient(t *testing.T) {
 		require.NotNil(t, resp.Chain)
 		require.Len(t, resp.Chain, 1)
 	})
+
+	t.Run("test deactivate account", func(t *testing.T) {
+		resp, err := c.DeactivateAccount(ctx, testAccount.URL)
+		require.NoError(t, err)
+		require.Equal(t, "deactivated", resp.Status)
+	})
 }
 
 func ExampleNewClient() {

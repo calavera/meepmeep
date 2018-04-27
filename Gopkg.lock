@@ -30,7 +30,7 @@
     "va",
     "wfe"
   ]
-  revision = "cae1c3522ee7a4871550f4ff9378677e06a4cdf7"
+  revision = "69ac484678af10fbb2407e29fff1ff1d85c58e90"
 
 [[projects]]
   name = "github.com/pkg/errors"
@@ -60,7 +60,7 @@
     "ed25519",
     "ed25519/internal/edwards25519"
   ]
-  revision = "88942b9c40a4c9d203b82b3731787b672d6e809b"
+  revision = "b49d69b5da943f7ef3c9cf91c8777c1f78a0cc3c"
 
 [[projects]]
   name = "gopkg.in/square/go-jose.v2"

@@ -277,6 +277,10 @@ func (c *Client) DeactivateAuthorization(ctx context.Context, url string) (*Auth
 	}
 	defer res.Body.Close()
 
+	if res.StatusCode != http.StatusOK {
+		return nil, reportProblem(res.Body, "error deactivating authorization")
+	}
+
 	var a acme.Authorization
 	if err := json.NewDecoder(res.Body).Decode(&a); err != nil {
 		return nil, errors.Wrap(err, "error decoding deactivating authorization response")
@@ -328,6 +332,34 @@ func (c *Client) GetOrder(ctx context.Context, url string) (*Order, error) {
 	defer res.Body.Close()
 
 	return decodeOrder(res, http.StatusOK)
+}
+
+// DeactivateAccount changes an account status to deactivated.
+// This ensures that a pending authorization can be ignored in a safe way.
+func (c *Client) DeactivateAccount(ctx context.Context, url string) (*Account, error) {
+	ar := deactivationRequest{
+		Status: deactivatedStatus,
+	}
+
+	res, err := c.postRequest(ctx, url, ar, false)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+
+	if res.StatusCode != http.StatusOK {
+		return nil, reportProblem(res.Body, "error deactivating account")
+	}
+
+	var a acme.Account
+	if err := json.NewDecoder(res.Body).Decode(&a); err != nil {
+		return nil, errors.Wrap(err, "error decoding deactivating account response")
+	}
+
+	return &Account{
+		Account: a,
+		URL:     res.Header.Get(locationKey),
+	}, nil
 }
 
 // nonce fetches a new nonce from the ACME server.
